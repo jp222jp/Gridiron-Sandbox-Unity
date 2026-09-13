@@ -21,12 +21,17 @@ public class PlayerPhysicsController : MonoBehaviour
     public float topSprintSpeedYards = 7.5f;
     [Tooltip("Maximum turning speed on the spot when pulling back or carving lanes.")]
     public float maxAgilityTurnSpeed = 190f;
-    [Tooltip("Exposed deadzone perimeter threshold filter. Adjusting this slider dynamically recalibrates all scale curves!")]
+    [Tooltip("Enforced deadzone to completely eliminate ghost drifting, endless spinning, and strafe twisting.")]
     public float analogDeadzoneFilterThreshold = 0.20f;
 
     public LayerMask groundCheckLayerMask;
 
     private bool isGrounded = true;
+
+    // 🔥 THE SYNCHRONIZED CORE SYSTEM FLAG:
+    // Exposes a pristine state handle that outside AI scripts and the ball engine read cleanly!
+    [HideInInspector] public bool isCarryingBall = false;
+    private GridironBallPhysics activeCarriedBallInstance = null;
 
     // Component Cache
     private PlayerAttributes attributes;
@@ -86,8 +91,6 @@ public class PlayerPhysicsController : MonoBehaviour
             Vector2 rawStick = hardwareControls.Gameplay.Move.ReadValue<Vector2>();
             isStrafePressed = hardwareControls.Gameplay.Strafe.IsPressed();
 
-            // 🔥 DYNAMIC VARIABLE DEADZONE GATING:
-            // Cleanly references the exposed variable to establish a sharp deadzone boundary.
             if (rawStick.magnitude > analogDeadzoneFilterThreshold)
             {
                 moveInput = rawStick;
@@ -115,9 +118,25 @@ public class PlayerPhysicsController : MonoBehaviour
             if (hardwareControls.Gameplay.Jump.triggered) ExecuteAthleticTakeoff();
         }
 
+        // UNIFIED BALL HANDLING HARDWARE TRIGGER GATES:
         if (Gamepad.current != null && Gamepad.current.leftStickButton.wasPressedThisFrame)
         {
-            EvaluateFootballPickupReachZone();
+            if (!isCarryingBall)
+            {
+                EvaluateFootballPickupReachZone();
+            }
+            else
+            {
+                ExecuteCleanFootballDrop();
+            }
+        }
+
+        // 🔥 STATE-BASED CARRIAGE OVERRIDE:
+        // Position the ball precisely over the helmet/shoulder line while sprint-turning
+        if (isCarryingBall && activeCarriedBallInstance != null)
+        {
+            activeCarriedBallInstance.transform.position = transform.position + (Vector3.up * 1.3f) + (transform.forward * 0.2f);
+            activeCarriedBallInstance.transform.rotation = transform.rotation;
         }
 
         if (Time.time >= nextCognitiveTickTime)
@@ -145,32 +164,22 @@ public class PlayerPhysicsController : MonoBehaviour
             return;
         }
 
-        // 🔥 SCALED OVER THE EXPOSED DEADZONE THRESHOLD VARIABLE:
-        // Automatically rescales your joystick magnitude from the edge of your deadzone setting up to full 1.0 tilt!
         float inputMagnitude = moveInput.magnitude;
         float scaledMagnitude = Mathf.Clamp01((inputMagnitude - analogDeadzoneFilterThreshold) / (1.0f - analogDeadzoneFilterThreshold));
 
         if (isStrafePressed)
         {
-            // DETACHED LT STRAFE GEAR:
             targetedIntentVector = (transform.forward * moveInput.y + transform.right * moveInput.x).normalized;
             targetLocomotionSpeed = topSprintSpeedYards * 0.75f * scaledMagnitude;
         }
         else
         {
-            // OPEN-FIELD SPRINT STEERING MATRIX:
             if (moveInput.y >= -0.15f)
             {
-                // 1. FORWARD LOGIC: Sharpness of rotation maps explicitly to lateral deflection (X)
-                float turnExecutionMultiplier = Mathf.Abs(moveInput.x); // Deeper out to side = faster twist rate
+                float turnExecutionMultiplier = Mathf.Abs(moveInput.x);
                 float targetRotationYaw = moveInput.x * maxAgilityTurnSpeed * turnExecutionMultiplier * Time.deltaTime;
                 transform.Rotate(0f, targetRotationYaw, 0f, Space.World);
 
-                // 2. REALISTIC ATHLETIC SPEED BLEED BLEND CURVE:
-                // Tracks the angle out from straight forward using the absolute horizontal deflection value.
-                // 100% straight forward = Max top speed multiplier (1.0).
-                // Gentle arcing turns = Sub-fractional speed drop (e.g. 0.95), matching near-top speed.
-                // Hard lateral cuts = Cleats plant hard, dampening speed smoothly down to a controlled 70%.
                 float speedDampenerCurve = Mathf.Lerp(1.0f, 0.70f, Mathf.Abs(moveInput.x));
                 targetLocomotionSpeed = topSprintSpeedYards * scaledMagnitude * speedDampenerCurve;
 
@@ -178,19 +187,16 @@ public class PlayerPhysicsController : MonoBehaviour
             }
             else
             {
-                // 3. BACKWARD LOGIC: Pulling back cancels translation entirely and forces spin on the spot
                 targetedIntentVector = Vector3.zero;
                 targetLocomotionSpeed = 0f;
 
-                float spinHeadingDirection = 1.0f; // Default Right-Handed Dominance spin
+                float spinHeadingDirection = 1.0f;
 
                 if (Mathf.Abs(moveInput.x) > 0.05f)
                 {
-                    // If angled to a corner, rotate in that stick's horizontal direction instead
                     spinHeadingDirection = Mathf.Sign(moveInput.x);
                 }
 
-                // Spin speed scales precisely from zero on the edge of the variable deadzone up to full agility capacity
                 float pivotVelocity = maxAgilityTurnSpeed * scaledMagnitude * spinHeadingDirection;
                 transform.Rotate(0f, pivotVelocity * Time.deltaTime, 0f, Space.World);
             }
@@ -199,7 +205,6 @@ public class PlayerPhysicsController : MonoBehaviour
 
     private void ExecuteLocomotionSimulation()
     {
-        // 🛡️ THE MID-AIR MOMENTUM SHIELD
         if (!isGrounded) return;
 
         if (targetedIntentVector.sqrMagnitude < 0.01f)
@@ -218,8 +223,6 @@ public class PlayerPhysicsController : MonoBehaviour
     {
         if (capsuleCollider == null) capsuleCollider = GetComponent<CapsuleCollider>();
 
-        // BOUNDS-ANCHORED PROFILE FOOTPRINT MATCHING:
-        // Calculates the bottom boundary center cleanly. Old collision trigger hooks are fully purged.
         Vector3 capsuleBottomWorldCenter = transform.TransformPoint(capsuleCollider.center) - new Vector3(0f, capsuleCollider.height * 0.5f, 0f);
         Vector3 boxCenter = capsuleBottomWorldCenter + Vector3.up * 0.02f;
         float radius = capsuleCollider != null ? capsuleCollider.radius : 0.5f;
@@ -309,6 +312,8 @@ public class PlayerPhysicsController : MonoBehaviour
             if (instantCaptureAllowed)
             {
                 Rigidbody ballRb = footballAsset.GetComponent<Rigidbody>();
+                Collider ballCollider = footballAsset.GetComponent<Collider>();
+
                 if (ballRb != null)
                 {
                     ballRb.isKinematic = true;
@@ -316,12 +321,49 @@ public class PlayerPhysicsController : MonoBehaviour
                     ballRb.angularVelocity = Vector3.zero;
                 }
 
+                if (ballCollider != null && capsuleCollider != null)
+                {
+                    Physics.IgnoreCollision(capsuleCollider, ballCollider, true);
+                }
+
                 if (secureBallHoldingAnchor == null) secureBallHoldingAnchor = this.transform;
                 footballAsset.transform.parent = secureBallHoldingAnchor;
 
-                footballAsset.transform.localPosition = Vector3.zero;
-                footballAsset.transform.localRotation = Quaternion.identity;
+                // 🔥 ESTABLISH THE SHAKING BRIDGE:
+                // Cache the memory pointers and notify the system that this player now commands the ball state!
+                activeCarriedBallInstance = footballAsset;
+                isCarryingBall = true;
+
+                Debug.Log("[BALL SYSTEM] State assigned to carrier. Communication bridge connected.");
             }
         }
+    }
+
+    private void ExecuteCleanFootballDrop()
+    {
+        if (activeCarriedBallInstance == null) return;
+
+        Collider ballCollider = activeCarriedBallInstance.GetComponent<Collider>();
+        Transform ballTransform = activeCarriedBallInstance.transform;
+        ballTransform.parent = null;
+
+        Rigidbody ballRb = activeCarriedBallInstance.GetComponent<Rigidbody>();
+        if (ballRb != null)
+        {
+            ballRb.isKinematic = false;
+            Vector3 releaseForce = (transform.forward * 3f) + (Vector3.up * 1.5f);
+            ballRb.linearVelocity = rb != null ? rb.linearVelocity + releaseForce : releaseForce;
+        }
+
+        if (capsuleCollider != null && ballCollider != null)
+        {
+            Physics.IgnoreCollision(capsuleCollider, ballCollider, false);
+        }
+
+        // 🔥 BREAK THE COMM BRIDGE CLEANLY:
+        isCarryingBall = false;
+        activeCarriedBallInstance = null;
+
+        Debug.Log("[BALL SYSTEM] Dropped. State flag reset to false.");
     }
 }

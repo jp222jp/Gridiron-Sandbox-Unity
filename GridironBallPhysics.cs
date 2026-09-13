@@ -34,12 +34,26 @@ public class GridironBallPhysics : MonoBehaviour
         rb = GetComponent<Rigidbody>();
     }
 
+    // 🔥 THE COMM-BRIDGE SECURITY LAYER:
+    // This hidden method intercept evaluates whether the ball is currently 
+    // being socketed by an active player carrier to protect translation loops.
+    private bool CheckIfCarriedByPlayer()
+    {
+        if (transform.parent != null)
+        {
+            PlayerPhysicsController currentCarrier = transform.parent.GetComponentInParent<PlayerPhysicsController>();
+            if (currentCarrier != null && currentCarrier.isCarryingBall)
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
     private void OnCollisionEnter(Collision collision)
     {
-        // 👇 FIXED: Absolute frame-zero safety shield!
-        // If a player is carrying the ball (it's kinematic), instantly abort execution
-        // and do not let any background torque or velocity overrides fire!
-        if (rb == null || rb.isKinematic) return;
+        // 👇 Safety Shield: Immediately abort if kinematic or carried to stop physics fighting
+        if (rb == null || rb.isKinematic || CheckIfCarriedByPlayer()) return;
 
         // Ignore direct player mesh collision tracking
         if (collision.collider.name.Contains("Player") || collision.collider.name.Contains("Dummy")) return;
@@ -65,64 +79,53 @@ public class GridironBallPhysics : MonoBehaviour
 
     private float CalculateSpinChaosScale()
     {
-        // Dynamic Chaos Scaling: Tight spirals are stabilized (0.3x chaos), 
-        // while dead-air knuckleballs expand the chaos envelope dramatically (1.4x chaos)
         switch (activeSpinType)
         {
             case FootballSpinType.CoordinatedSpiral: return 0.35f;
-            case FootballSpinType.Backspin:          return 0.70f;
-            case FootballSpinType.AussieDropLeft:   return 0.80f;
-            case FootballSpinType.AussieDropRight:  return 0.80f;
-            case FootballSpinType.Knuckleball:       return 1.45f;
-            default:                                 return 1.0f;
+            case FootballSpinType.Backspin: return 0.70f;
+            case FootballSpinType.AussieDropLeft: return 0.80f;
+            case FootballSpinType.AussieDropRight: return 0.80f;
+            case FootballSpinType.Knuckleball: return 1.45f;
+            default: return 1.0f;
         }
     }
 
     private void ExecuteStrategicDirectionalSpinBounce(float impactForce)
     {
-        // Smoothly extract the ball's current horizontal path traveling vectors
         Vector3 flatForwardVelocity = new Vector3(rb.linearVelocity.x, 0f, rb.linearVelocity.z);
         Vector3 flatForwardDir = flatForwardVelocity.normalized;
         Vector3 flatRightDir = Vector3.Cross(Vector3.up, flatForwardDir).normalized;
 
         float redirectPower = Mathf.Min(impactForce * 0.35f, maxBounceImpulseForce * 0.8f);
-
         Vector3 strategicForceVector = Vector3.zero;
 
-        // 📐 APPLICATION OF INTENTIONAL SPIN DIRECTION LAWS:
         switch (activeSpinType)
         {
             case FootballSpinType.CoordinatedSpiral:
-                // Normal Spiral: Slingshots linearly forward along its current path with a smooth skip
                 strategicForceVector = flatForwardDir * 1.2f + Vector3.up * 0.3f;
                 Debug.Log("[SPIN SYSTEM] Spiral Slide! Preserving linear downfield speed.");
                 break;
 
             case FootballSpinType.Backspin:
-                // Backspin: Counter-acts forward energy completely, driving the vector BACKWARD or straight up
                 strategicForceVector = (-flatForwardDir * 0.8f) + (Vector3.up * 1.1f);
                 Debug.Log("[SPIN SYSTEM] Backspin Bite! Stopping forward drift, kicking backward.");
                 break;
 
             case FootballSpinType.AussieDropLeft:
-                // Aussie Left: Displaces forward velocity, shearing the ball sharply to the left boundary line
                 strategicForceVector = (flatForwardDir * 0.4f) + (-flatRightDir * 1.0f) + (Vector3.up * 0.4f);
                 Debug.Log("[SPIN SYSTEM] Aussie Drop Left! Shearing sharply toward left sideline.");
                 break;
 
             case FootballSpinType.AussieDropRight:
-                // Aussie Right: Displaces forward velocity, shearing the ball sharply to the right boundary line
                 strategicForceVector = (flatForwardDir * 0.4f) + (flatRightDir * 1.0f) + (Vector3.up * 0.4f);
                 Debug.Log("[SPIN SYSTEM] Aussie Drop Right! Shearing sharply toward right sideline.");
                 break;
 
             case FootballSpinType.Knuckleball:
-                // Knuckleball: Bypasses the predictable glide completely, forcing a standard random kick
                 ExecuteErraticPointedTipBounce(impactForce);
                 return;
         }
 
-        // Inject the intentional strategic force vector into the physical Rigidbody stream
         rb.AddForce(strategicForceVector * redirectPower, ForceMode.VelocityChange);
     }
 
@@ -145,8 +148,10 @@ public class GridironBallPhysics : MonoBehaviour
 
     void FixedUpdate()
     {
-        // 🛡️ EXIT GATE: Absolute physics safety shield
-        if (rb == null || rb.isKinematic) return;
+        // 🛡️ THE INTERCEPT SHIELD:
+        // If the communication bridge notes that a player is carrying this ball, 
+        // completely bypass all internal velocity additions and turf scanning loops!
+        if (rb == null || rb.isKinematic || CheckIfCarriedByPlayer()) return;
 
         float currentSpeed = rb.linearVelocity.magnitude;
         CheckIfBallIsRollingOnTurf();
@@ -168,6 +173,12 @@ public class GridironBallPhysics : MonoBehaviour
 
     private void CheckIfBallIsRollingOnTurf()
     {
+        // Safety hook to drop tracking checks entirely if socketed
+        if (CheckIfCarriedByPlayer())
+        {
+            isTouchingGround = false;
+            return;
+        }
         isTouchingGround = Physics.Raycast(transform.position, Vector3.down, 0.3f);
     }
 }
